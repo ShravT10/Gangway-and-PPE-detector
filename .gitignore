@@ -1,0 +1,9 @@
+dataset
+.venv
+
+runs/compare
+
+runs/detect/val 
+
+violations
+.env
