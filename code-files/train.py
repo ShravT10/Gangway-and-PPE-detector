@@ -2,7 +2,8 @@
 Train YOLOv8 — Person / Helmet / Head Detection
 -------------------------------------------------
 Dataset: ~1000 real images, bounding-box labels (YOLO format), 3 classes
-Usage: python train.py --data path/to/data.yaml
+Usage:
+  python train.py --data path/to/data.yaml --project runs/detect --name my-run
 """
 
 import argparse
@@ -50,8 +51,8 @@ DEFAULT_CFG = {
     "save_period"  : 10,
     "val"          : True,
     "plots"        : True,
-    "project"      : "runs/detect",
-    "name"         : "ppe-detector",
+    "project"      : "runs/detect",   # ← now overridable via --project
+    "name"         : "ppe-detector",  # ← now overridable via --name
 }
 
 
@@ -148,7 +149,7 @@ def train(data_yaml: str, resume: bool = False, overrides: dict = None):
     )
 
     save_dir = Path(results.save_dir)
-    best_pt  = save_dir / "weights" / "best.pt"
+    best_pt  = save_dir / "weights" / "best.pt"   # fixed: was hardcoded to "Dataset2-model/" before
 
     print("\n" + "=" * 55)
     print("  TRAINING COMPLETE")
@@ -178,12 +179,18 @@ if __name__ == "__main__":
     parser.add_argument("--epochs", type=int, default=None, help="Override number of epochs")
     parser.add_argument("--batch", type=int, default=None, help="Override batch size")
     parser.add_argument("--model", type=str, default=None, help="Override base model (e.g. yolov8m.pt)")
+    parser.add_argument("--project", type=str, default=None,
+                         help="Root output folder for this run (e.g. runs/detect, Dataset2-runs)")
+    parser.add_argument("--name", type=str, default=None,
+                         help="Subfolder name for this run (e.g. ppe-detector, dataset2-run1)")
     parser.add_argument("--resume", action="store_true", help="Resume training from last checkpoint")
     args = parser.parse_args()
 
     overrides = {}
-    if args.epochs: overrides["epochs"] = args.epochs
-    if args.batch:  overrides["batch"]  = args.batch
-    if args.model:  overrides["model"]  = args.model
+    if args.epochs:  overrides["epochs"]  = args.epochs
+    if args.batch:   overrides["batch"]   = args.batch
+    if args.model:   overrides["model"]   = args.model
+    if args.project: overrides["project"] = args.project
+    if args.name:    overrides["name"]    = args.name
 
     train(args.data, resume=args.resume, overrides=overrides)
