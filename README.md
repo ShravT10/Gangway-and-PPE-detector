@@ -19,7 +19,7 @@ Camera-Project/
 │   └── compare/              # side-by-side comparison images
 ├── violations/                # screenshots saved when "head" (no helmet) is detected
 ├── yolov8s.pt                 # pretrained base checkpoint used to start training
-├── .env                       # your real email credentials (not committed)
+├── .env                       # your real email credentials 
 ├── .env_example                # template showing required environment variables
 ├── requirements.txt
 └── README.md
