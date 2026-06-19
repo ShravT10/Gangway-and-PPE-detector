@@ -1,258 +1,493 @@
+
 """
-Script 1: Dataset Checker for YOLOv8 Segmentation
----------------------------------------------------
-Run this BEFORE training to catch any issues early.
-Usage: python check_dataset.py --data path/to/data.yaml
+YOLOv8 Detection Dataset Checker
+--------------------------------
+Checks YOLO bounding-box datasets before training.
+
+Usage:
+python check_dataset.py --data path/to/data.yaml
 """
 
-import os
 import sys
 import yaml
 import argparse
 from pathlib import Path
 from collections import defaultdict
 
-# ── optional visualisation (only if matplotlib/cv2 are installed) ──────────
+# ── optional visualization ──────────────────────────────────────────────────
 try:
     import cv2
     import numpy as np
     import matplotlib.pyplot as plt
     import matplotlib.patches as mpatches
+
     VISUAL = True
 except ImportError:
     VISUAL = False
     print("[WARN] cv2 / matplotlib not found – skipping visualisation.\n")
 
 
-# ───────────────────────────── helpers ─────────────────────────────────────
+# ───────────────────────────── helpers ──────────────────────────────────────
 
 COLORS = [
-    (255, 56,  56),   # red   – class 0
-    (56,  255, 56),   # green – class 1
-    (56,  56,  255),  # blue  – class 2
+    (255, 56, 56),   # red
+    (56, 255, 56),   # green
+    (56, 56, 255),   # blue
+    (255, 255, 56),  # yellow
+    (255, 56, 255),  # magenta
 ]
 
+
 def load_yaml(path: str) -> dict:
-    with open(path) as f:
+    with open(path, "r") as f:
         return yaml.safe_load(f)
 
+
 def resolve_path(yaml_dir: Path, rel: str) -> Path:
-    """Resolve a path that may be relative to the yaml file."""
     p = Path(rel)
+
     if not p.is_absolute():
         p = (yaml_dir / p).resolve()
+
     return p
 
-def count_files(folder: Path, exts=(".jpg", ".jpeg", ".png", ".bmp")):
+
+def count_files(folder: Path, exts=(".jpg", ".jpeg", ".png", ".bmp", ".webp")):
     if not folder.exists():
         return [], False
-    files = [f for f in folder.iterdir() if f.suffix.lower() in exts]
+
+    files = [
+        f for f in folder.iterdir()
+        if f.suffix.lower() in exts
+    ]
+
     return files, True
 
+
 def parse_label(txt_path: Path):
-    """Return list of (class_id, [(x,y), ...]) for each object in a label file."""
+    """
+    YOLO Detection format:
+
+    class x_center y_center width height
+
+    Returns:
+        [(class_id, (xc, yc, w, h)), ...]
+    """
+
     objects = []
-    with open(txt_path) as f:
-        for line in f:
-            parts = line.strip().split()
-            if not parts:
-                continue
-            cls = int(parts[0])
-            coords = list(map(float, parts[1:]))
-            if len(coords) % 2 != 0 or len(coords) < 6:
-                # malformed – flag but skip
-                objects.append((cls, None))
-                continue
-            pts = [(coords[i], coords[i+1]) for i in range(0, len(coords), 2)]
-            objects.append((cls, pts))
+
+    try:
+        with open(txt_path, "r") as f:
+
+            for line in f:
+                parts = line.strip().split()
+
+                if not parts:
+                    continue
+
+                try:
+                    cls = int(parts[0])
+
+                    if len(parts) != 5:
+                        objects.append((cls, None))
+                        continue
+
+                    xc, yc, bw, bh = map(float, parts[1:])
+
+                    objects.append(
+                        (
+                            cls,
+                            (xc, yc, bw, bh)
+                        )
+                    )
+
+                except Exception:
+                    objects.append((-1, None))
+
+    except Exception:
+        pass
+
     return objects
 
-def draw_segmentation(img_path: Path, label_path: Path, class_names: list):
-    """Return an annotated BGR image with polygon overlays."""
+
+def draw_bboxes(img_path: Path, label_path: Path, class_names: list):
+
     img = cv2.imread(str(img_path))
+
     if img is None:
         return None
+
     h, w = img.shape[:2]
-    overlay = img.copy()
 
     if label_path.exists():
-        for cls, pts in parse_label(label_path):
-            if pts is None:
+
+        objects = parse_label(label_path)
+
+        for cls, bbox in objects:
+
+            if bbox is None:
                 continue
+
+            xc, yc, bw, bh = bbox
+
+            x1 = int((xc - bw / 2) * w)
+            y1 = int((yc - bh / 2) * h)
+
+            x2 = int((xc + bw / 2) * w)
+            y2 = int((yc + bh / 2) * h)
+
             color = COLORS[cls % len(COLORS)]
-            pixel_pts = np.array(
-                [(int(x * w), int(y * h)) for x, y in pts], dtype=np.int32
+
+            cv2.rectangle(
+                img,
+                (x1, y1),
+                (x2, y2),
+                color,
+                2
             )
-            cv2.fillPoly(overlay, [pixel_pts], color)
-            cv2.polylines(img, [pixel_pts], True, color, 2)
-            cx, cy = pixel_pts.mean(axis=0).astype(int)
-            label = class_names[cls] if cls < len(class_names) else str(cls)
-            cv2.putText(img, label, (cx, cy),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
 
-    return cv2.addWeighted(overlay, 0.35, img, 0.65, 0)
+            label = (
+                class_names[cls]
+                if cls < len(class_names)
+                else str(cls)
+            )
+
+            cv2.putText(
+                img,
+                label,
+                (x1, max(0, y1 - 5)),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.6,
+                color,
+                2
+            )
+
+    return img
 
 
-# ───────────────────────────── main check ──────────────────────────────────
+# ───────────────────────────── main checker ─────────────────────────────────
+
 
 def check(yaml_path: str, preview: int = 4):
+
     yaml_path = Path(yaml_path).resolve()
+
     if not yaml_path.exists():
         print(f"[ERROR] data.yaml not found: {yaml_path}")
         sys.exit(1)
 
-    cfg       = load_yaml(yaml_path)
-    yaml_dir  = yaml_path.parent
-    nc        = cfg.get("nc", 0)
-    names     = cfg.get("names", [])
+    cfg = load_yaml(yaml_path)
 
-    print("=" * 60)
-    print("  YOLO DATASET CHECKER")
-    print("=" * 60)
-    print(f"  yaml   : {yaml_path}")
-    print(f"  classes: {nc} → {names}")
+    yaml_dir = yaml_path.parent
+
+    nc = cfg.get("nc", 0)
+    names = cfg.get("names", [])
+
+    print("=" * 70)
+    print("YOLO DETECTION DATASET CHECKER")
+    print("=" * 70)
+
+    print(f"YAML    : {yaml_path}")
+    print(f"Classes : {nc}")
+    print(f"Names   : {names}")
     print()
 
     splits = {
         "train": cfg.get("train"),
-        "val"  : cfg.get("val"),
-        "test" : cfg.get("test"),
+        "val": cfg.get("val"),
+        "test": cfg.get("test"),
     }
 
-    total_images  = 0
-    total_labels  = 0
-    class_counts  = defaultdict(int)   # per-class object count
-    issues        = []
-    preview_data  = []                 # (img_path, lbl_path) for visualisation
+    total_images = 0
+    total_labels = 0
+
+    class_counts = defaultdict(int)
+    issues = []
+
+    preview_data = []
 
     for split, rel in splits.items():
+
         if rel is None:
-            print(f"  [{split:5s}] – not specified in yaml, skipping")
+            print(f"[{split}] Not defined in YAML")
             continue
 
         img_dir = resolve_path(yaml_dir, rel)
-        # Labels sit next to images: dataset/train/images → dataset/train/labels
-        # Fallback: dataset/labels/train  (older Roboflow layout)
+
         lbl_dir_sibling = img_dir.parent / "labels"
-        lbl_dir_legacy  = img_dir.parent.parent / "labels" / img_dir.parent.name
-        lbl_dir = lbl_dir_sibling if lbl_dir_sibling.exists() else lbl_dir_legacy
+        lbl_dir_legacy = (
+            img_dir.parent.parent /
+            "labels" /
+            img_dir.parent.name
+        )
+
+        lbl_dir = (
+            lbl_dir_sibling
+            if lbl_dir_sibling.exists()
+            else lbl_dir_legacy
+        )
 
         images, img_ok = count_files(img_dir)
         labels, lbl_ok = count_files(lbl_dir, exts=(".txt",))
 
         if not img_ok:
-            print(f"  [{split:5s}] images dir NOT FOUND: {img_dir}")
-            issues.append(f"Missing images dir for split '{split}'")
+            issues.append(
+                f"Missing images directory for split '{split}'"
+            )
             continue
 
-        print(f"  [{split:5s}] images : {len(images):>4}  → {img_dir}")
-        print(f"  [{split:5s}] labels : {len(labels):>4}  → {lbl_dir}")
+        print(
+            f"[{split}] Images: {len(images):5d} "
+            f"Labels: {len(labels):5d}"
+        )
 
-        # ── per-image checks ──
         label_names = {f.stem for f in labels}
+        image_names = {f.stem for f in images}
+
+        # Check images -> labels
         for img in images:
+
             total_images += 1
-            lbl_path = lbl_dir / (img.stem + ".txt")
+
+            lbl_path = lbl_dir / f"{img.stem}.txt"
 
             if img.stem not in label_names:
-                issues.append(f"[{split}] Missing label for: {img.name}")
+                issues.append(
+                    f"[{split}] Missing label: {img.name}"
+                )
                 continue
 
             total_labels += 1
+
             objects = parse_label(lbl_path)
 
             if not objects:
-                issues.append(f"[{split}] Empty label file: {lbl_path.name}")
+                issues.append(
+                    f"[{split}] Empty label file: {lbl_path.name}"
+                )
                 continue
 
-            for cls, pts in objects:
+            for cls, bbox in objects:
+
+                if cls < 0:
+                    issues.append(
+                        f"[{split}] Invalid class ID in "
+                        f"{lbl_path.name}"
+                    )
+                    continue
+
                 if cls >= nc:
                     issues.append(
-                        f"[{split}] Class id {cls} >= nc({nc}) in {lbl_path.name}"
+                        f"[{split}] Class ID {cls} >= nc({nc}) "
+                        f"in {lbl_path.name}"
                     )
+
                 class_counts[cls] += 1
-                if pts is None:
+
+                if bbox is None:
                     issues.append(
-                        f"[{split}] Bounding box annotation in {lbl_path.name}"
+                        f"[{split}] Malformed annotation in "
+                        f"{lbl_path.name}"
+                    )
+                    continue
+
+                xc, yc, bw, bh = bbox
+
+                if not (
+                    0 <= xc <= 1 and
+                    0 <= yc <= 1 and
+                    0 < bw <= 1 and
+                    0 < bh <= 1
+                ):
+                    issues.append(
+                        f"[{split}] Invalid bbox values in "
+                        f"{lbl_path.name}"
                     )
 
             if len(preview_data) < preview:
                 preview_data.append((img, lbl_path))
 
+        # Check labels -> images
+        extra_labels = label_names - image_names
+
+        for stem in extra_labels:
+            issues.append(
+                f"[{split}] Label exists but image missing: {stem}.txt"
+            )
+
         print()
 
-    # ── summary ─────────────────────────────────────────────────────────────
-    print("-" * 60)
-    print(f"  Total images : {total_images}")
-    print(f"  Total labeled: {total_labels}")
+    # ───────────────────────── summary ─────────────────────────
+
+    print("-" * 70)
+
+    print(f"Total Images : {total_images}")
+    print(f"Total Labels : {total_labels}")
+
     print()
-    print("  Class distribution:")
+
+    print("Class Distribution")
+
+    total_objects = sum(class_counts.values())
+
     for cls_id, cnt in sorted(class_counts.items()):
-        name = names[cls_id] if cls_id < len(names) else f"cls_{cls_id}"
-        bar  = "█" * min(cnt, 40)
-        print(f"    [{cls_id}] {name:15s} {cnt:>5}  {bar}")
+
+        cls_name = (
+            names[cls_id]
+            if cls_id < len(names)
+            else f"cls_{cls_id}"
+        )
+
+        pct = (
+            (cnt / total_objects) * 100
+            if total_objects > 0
+            else 0
+        )
+
+        bar = "█" * min(40, int(cnt / max(1, total_objects) * 100))
+
+        print(
+            f"[{cls_id}] "
+            f"{cls_name:<15} "
+            f"{cnt:>8} "
+            f"({pct:5.2f}%) "
+            f"{bar}"
+        )
+
+    print()
+
+    # Class imbalance warnings
+    for cls_id, cnt in class_counts.items():
+
+        if total_objects == 0:
+            continue
+
+        pct = cnt / total_objects
+
+        if pct < 0.01:
+            cls_name = (
+                names[cls_id]
+                if cls_id < len(names)
+                else str(cls_id)
+            )
+
+            print(
+                f"[WARN] Class '{cls_name}' "
+                f"represents only {pct:.2%} of annotations"
+            )
+
     print()
 
     if issues:
-        print(f"  ⚠  {len(issues)} issue(s) found:")
-        for iss in issues[:20]:   # cap at 20 to avoid spam
-            print(f"     • {iss}")
-        if len(issues) > 20:
-            print(f"     ... and {len(issues)-20} more")
+
+        print(f"FOUND {len(issues)} ISSUE(S)\n")
+
+        for issue in issues[:50]:
+            print(f"• {issue}")
+
+        if len(issues) > 50:
+            print(
+                f"\n... and {len(issues) - 50} more issues"
+            )
+
     else:
-        print("  ✅ No issues found! Dataset looks clean.")
+        print("DATASET LOOKS CLEAN")
 
-    print("=" * 60)
+    print("=" * 70)
 
-    # ── visual preview ───────────────────────────────────────────────────────
+    # ───────────────────── visualization ──────────────────────
+
     if VISUAL and preview_data:
-        print(f"\n  Showing {len(preview_data)} sample annotation(s) …")
+
         cols = min(len(preview_data), 4)
-        fig, axes = plt.subplots(1, cols, figsize=(5 * cols, 5))
+
+        fig, axes = plt.subplots(
+            1,
+            cols,
+            figsize=(5 * cols, 5)
+        )
+
         if cols == 1:
             axes = [axes]
 
-        for ax, (img_path, lbl_path) in zip(axes, preview_data):
-            annotated = draw_segmentation(img_path, lbl_path, names)
+        for ax, (img_path, lbl_path) in zip(
+            axes,
+            preview_data
+        ):
+
+            annotated = draw_bboxes(
+                img_path,
+                lbl_path,
+                names
+            )
+
             if annotated is None:
                 ax.axis("off")
                 continue
-            annotated_rgb = cv2.cvtColor(annotated, cv2.COLOR_BGR2RGB)
+
+            annotated_rgb = cv2.cvtColor(
+                annotated,
+                cv2.COLOR_BGR2RGB
+            )
+
             ax.imshow(annotated_rgb)
             ax.set_title(img_path.name, fontsize=8)
             ax.axis("off")
 
-        # legend
         patches = [
             mpatches.Patch(
-                color=[c/255 for c in COLORS[i % len(COLORS)]],
-                label=names[i] if i < len(names) else f"cls_{i}"
+                color=[c / 255 for c in COLORS[i % len(COLORS)]],
+                label=names[i]
+                if i < len(names)
+                else f"cls_{i}"
             )
             for i in range(nc)
         ]
-        fig.legend(handles=patches, loc="lower center",
-                   ncol=nc, fontsize=10, frameon=False)
-        plt.suptitle("Sample Annotations (polygon segmentation)", fontsize=12)
+
+        fig.legend(
+            handles=patches,
+            loc="lower center",
+            ncol=max(1, nc),
+            fontsize=10,
+            frameon=False
+        )
+
+        plt.suptitle(
+            "Sample Bounding Box Annotations",
+            fontsize=12
+        )
+
         plt.tight_layout()
         plt.show()
+
     elif not VISUAL:
-        print("  (Install opencv-python + matplotlib to see visual previews)")
+        print(
+            "\nInstall opencv-python and matplotlib "
+            "to view annotation previews."
+        )
 
 
-# ───────────────────────────── entry point ─────────────────────────────────
+# ───────────────────────── entry point ─────────────────────────
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="YOLOv8 dataset checker")
+
+    parser = argparse.ArgumentParser(
+        description="YOLO Detection Dataset Checker"
+    )
+
     parser.add_argument(
         "--data",
         default="data.yaml",
-        help="Path to your data.yaml file"
+        help="Path to data.yaml"
     )
+
     parser.add_argument(
         "--preview",
         type=int,
         default=4,
-        help="Number of annotated images to preview (default: 4)"
+        help="Number of preview images"
     )
+
     args = parser.parse_args()
+
     check(args.data, args.preview)
