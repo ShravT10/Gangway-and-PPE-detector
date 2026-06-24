@@ -24,8 +24,8 @@ DEFAULT_CFG = {
     "workers"      : 8,
 
     # ── optimiser (use YOLO's battle-tested defaults) ──
-    "optimizer"    : "auto",         # lets Ultralytics pick SGD w/ tuned schedule
-    "lr0"          : 0.01,
+    "optimizer"    : "AdamW",         # lets Ultralytics pick SGD w/ tuned schedule
+    "lr0"          : 0.001,
     "lrf"          : 0.01,
     "momentum"     : 0.937,
     "weight_decay" : 0.0005,
@@ -51,8 +51,8 @@ DEFAULT_CFG = {
     "save_period"  : 10,
     "val"          : True,
     "plots"        : True,
-    "project"      : "runs/detect",   # ← now overridable via --project
-    "name"         : "ppe-detector",  # ← now overridable via --name
+    "project"      : "11k-imgs-model-v3",   # ← now overridable via --project
+    "name"         : "run3",  # ← now overridable via --name
 }
 
 
